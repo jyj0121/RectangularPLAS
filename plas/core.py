@@ -171,13 +171,13 @@ def divisors(n):
 
 # @torch.compile(fullgraph=True)
 def params_to_blocky(
-    params, block_size, block_divisor, num_pixel_blocks, shift_y, shift_x
+    params, block_size_y, block_size_x, block_divisor, num_pixel_blocks_y, num_pixel_blocks_x, shift_y, shift_x
 ):
     # params: (c, h, w)
     params_rolled = torch.roll(params, (shift_y, shift_x), dims=(1, 2))
 
     params_truncated = params_rolled[
-        :, : num_pixel_blocks * block_size, : num_pixel_blocks * block_size
+        :, : num_pixel_blocks_y * block_size_y, : num_pixel_blocks_x * block_size_x
     ]
 
     # get the channel out of the way temporarily
@@ -190,24 +190,23 @@ def params_to_blocky(
     # (r^2, c, h/r, w/r)
     params_unshuffled = params_unshuffled_cbhw.permute(1, 0, 2, 3)
 
-    # (r^2, c, pb, h/r/pb, pb, w/r/pb)
+    # (r^2, c, pb_y, h/r/pb_y, pb_x, w/r/pb_x)
     params_unshuffled_blocky_inline = params_unshuffled.reshape(
         -1,
         params_unshuffled.shape[1],
-        num_pixel_blocks,
-        block_size,
-        num_pixel_blocks,
-        block_size,
+        num_pixel_blocks_y,
+        block_size_y,
+        num_pixel_blocks_x,
+        block_size_x,
     )
 
-    # (r^2, pb, pb, c, h/r/pb, w/r/pb)
+    # (r^2, pb_y, pb_x, c, h/r/pb_y, w/r/pb_x)
     params_unshuffled_blocky_first = params_unshuffled_blocky_inline.permute(
         0, 2, 4, 1, 3, 5
     )
 
     # flatten the batch dimensions
-    # (r^2 * pb^2, c, h/r/pb, w/r/pb)
-    # TODO replace with flatten?
+    # (r^2 * pb_y * pb_x, c, h/r/pb_y, w/r/pb_x)
     params_blocky_batch_flat = params_unshuffled_blocky_first.reshape(
         -1,
         params_unshuffled_blocky_first.shape[3],
@@ -215,7 +214,7 @@ def params_to_blocky(
         params_unshuffled_blocky_first.shape[5],
     )
 
-    # (r^2 * pb^2, c, block_size * block_size)
+    # (r^2 * pb_y * pb_x, c, block_size_y * block_size_x)
     params_blocky_flat = params_blocky_batch_flat.flatten(start_dim=2)
 
     return params_rolled, params_blocky_flat
@@ -225,24 +224,26 @@ def params_to_blocky(
 def blocky_to_params(
     params_rolled,
     params_blocky_flat,
-    block_size,
+    block_size_y,
+    block_size_x,
     block_divisor,
-    num_pixel_blocks,
+    num_pixel_blocks_y,
+    num_pixel_blocks_x,
     shift_y,
     shift_x,
 ):
     # unflatten the block dimensions
-    # (r^2, pb, pb, c, h/r/pb, w/r/pb)
+    # (r^2, pb_y, pb_x, c, h/r/pb_y, w/r/pb_x)
     params_unshuffled_blocky_first = params_blocky_flat.reshape(
         block_divisor**2,
-        num_pixel_blocks,
-        num_pixel_blocks,
+        num_pixel_blocks_y,
+        num_pixel_blocks_x,
         params_blocky_flat.shape[1],
-        block_size,
-        block_size,
+        block_size_y,
+        block_size_x,
     )
 
-    # (r^2, c, pb, h/r/pb, pb, w/r/pb)
+    # (r^2, c, pb_y, h/r/pb_y, pb_x, w/r/pb_x)
     params_unshuffled_blocky_inline = params_unshuffled_blocky_first.permute(
         0, 3, 1, 4, 2, 5
     )
@@ -251,8 +252,8 @@ def blocky_to_params(
     params_unshuffled = params_unshuffled_blocky_inline.reshape(
         params_unshuffled_blocky_inline.shape[0],
         params_unshuffled_blocky_inline.shape[1],
-        params_unshuffled_blocky_inline.shape[2] * block_size,
-        params_unshuffled_blocky_inline.shape[4] * block_size,
+        params_unshuffled_blocky_inline.shape[2] * block_size_y,
+        params_unshuffled_blocky_inline.shape[4] * block_size_x,
     )
 
     # (c, r^2, h/r, w/r)
@@ -265,7 +266,7 @@ def blocky_to_params(
     params_unshuffled = params_shuffled.squeeze(1)
 
     params_rolled[
-        :, : num_pixel_blocks * block_size, : num_pixel_blocks * block_size
+        :, : num_pixel_blocks_y * block_size_y, : num_pixel_blocks_x * block_size_x
     ] = params_unshuffled
 
     params = torch.roll(params_rolled, (-shift_y, -shift_x), dims=(1, 2))
@@ -275,11 +276,11 @@ def blocky_to_params(
 
 # @torch.compile(options={"epilogue_fusion": True, "max_autotune": True})
 def reorder_blocky_shuffled(
-    params_blocky_flat, grid_indices_blocky_flat, target_blocky_flat, block_size
+    params_blocky_flat, grid_indices_blocky_flat, target_blocky_flat, block_size_y, block_size_x
 ):
 
     shuffled_block_indices = torch.randperm(
-        block_size * block_size, device=params_blocky_flat.device
+        block_size_y * block_size_x, device=params_blocky_flat.device
     )
     # shuffled_block_indices = torch.arange(
     #     block_size * block_size, device=params.device
@@ -347,15 +348,21 @@ def reorder_plas(
         params, filter_size_x, filter_size_y, border_type_x, border_type_y
     )
 
-    sidelen = params.shape[1]
+    sidelen_y, sidelen_x = params.shape[1:]
 
-    block_size = filter_size_x + 1
+    block_size_x = filter_size_x + 1
+    block_size_y = filter_size_y + 1
 
-    block_size = min(block_size, sidelen)
+    block_size_x = min(block_size_x, sidelen_x)
+    block_size_y = min(block_size_y, sidelen_y)
 
     # it must be possible to form groups of 4 pixels
-    block_size = block_size // 2 * 2
-    block_size = max(block_size, min_block_size)
+    block_size_x = block_size_x // 2 * 2
+    block_size_x = max(block_size_x, min_block_size)
+
+    block_size_y = block_size_y // 2 * 2
+    block_size_y = max(block_size_y, min_block_size)
+
 
     # IMPORTANT this completely disables the pixel unshuffling
     # leading to all operations being performed on blocks, no strides
@@ -365,10 +372,11 @@ def reorder_plas(
 
     block_divisor = 1
 
-    num_pixel_blocks = sidelen // block_size
+    num_pixel_blocks_x = sidelen_x // block_size_x
+    num_pixel_blocks_y = sidelen_y // block_size_y
 
     if pbar:
-        pbar.set_description(f"filter_size={filter_size_x} - {block_size=}")
+      pbar.set_description(f"filter_size=({filter_size_x},{filter_size_y}) block_size=({block_size_x},{block_size_y})")
 
     num_reorders = 0
 
@@ -377,26 +385,23 @@ def reorder_plas(
     block_config = 0
     while True:
 
-        shift_y = np.random.randint(0, block_size)
-        shift_x = np.random.randint(0, block_size)
+        shift_y = np.random.randint(0, block_size_y)
+        shift_x = np.random.randint(0, block_size_x)
 
         # (r^2 * pb^2, c, block_size * block_size)
         params_rolled, params_blocky_flat = params_to_blocky(
-            params, block_size, block_divisor, num_pixel_blocks, shift_y, shift_x
+            params, block_size_y, block_size_x, block_divisor, num_pixel_blocks_y, num_pixel_blocks_x, shift_y, shift_x
         )
 
         target_rolled, target_blocky_flat = params_to_blocky(
-            target, block_size, block_divisor, num_pixel_blocks, shift_y, shift_x
+            target, block_size_y, block_size_x, block_divisor, num_pixel_blocks_y, num_pixel_blocks_x, shift_y, shift_x
         )
 
         # TODO perf: could only map the indices here
         # and then index params and target with the mapped indices
         grid_indices_rolled, grid_indices_blocky_flat = params_to_blocky(
-            grid_indices, block_size, block_divisor, num_pixel_blocks, shift_y, shift_x
+            grid_indices, block_size_y, block_size_x, block_divisor, num_pixel_blocks_y, num_pixel_blocks_x, shift_y, shift_x
         )
-
-        # replace all values in one block with the same color
-        # params_blocky_flat = debug_show_blocks(params_blocky_flat)
 
         prev_dist = l2_dist(params_blocky_flat, target_blocky_flat)
 
@@ -412,7 +417,8 @@ def reorder_plas(
                 params_blocky_flat,
                 grid_indices_blocky_flat,
                 target_blocky_flat,
-                block_size,
+                block_size_y,
+                block_size_x
             )
 
             cur_dist = l2_dist(params_blocky_flat, target_blocky_flat)
@@ -443,9 +449,11 @@ def reorder_plas(
         params = blocky_to_params(
             params_rolled,
             params_blocky_flat,
-            block_size,
+            block_size_y,
+            block_size_x,
             block_divisor,
-            num_pixel_blocks,
+            num_pixel_blocks_y,
+            num_pixel_blocks_x,
             shift_y,
             shift_x,
         ).contiguous()
@@ -454,9 +462,11 @@ def reorder_plas(
         grid_indices = blocky_to_params(
             grid_indices_rolled,
             grid_indices_blocky_flat,
-            block_size,
+            block_size_y,
+            block_size_x,
             block_divisor,
-            num_pixel_blocks,
+            num_pixel_blocks_y,
+            num_pixel_blocks_x,            
             shift_y,
             shift_x,
         ).contiguous()
@@ -495,15 +505,7 @@ def sort_with_plas(
     seed=None,
     verbose=False,
 ):
-    """ Sorts a set of parameters in a 2xn grid using the Parallel Linear Assignment Sorting (PLAS) algorithm.
-
-    Args:
-        border_type_x/y (str): Border for the Gaussian blur that is performed to create the targets for sorting.
-                               The expected modes are: 'constant', 'reflect', 'replicate' or 'circular' (kornia gaussian_blur2d border_type).
-                               x defaults to 'circular', y defaults to 'reflect': this allows for seamless resampling 1D data into square 2D grids.
-        min_blur_radius: Last/smallest blur radius to apply before stopping sort. Defaults to 1 for optimal sort. Increase for earlier stops.
-    """
-
+    
     if seed is not None:
         torch.manual_seed(seed)
         np.random.seed(seed)
@@ -511,16 +513,16 @@ def sort_with_plas(
     grid_shape = params.shape[1:]
     H, W = grid_shape
 
-    # not implemented for non-square aspect ratios
-    assert H == W
-
     start_time = time.time()
 
-    radius_f = max(H, W) / 2 - 1
-    radii = list(radius_seq(max_radius=radius_f, min_radius=min_blur_radius, radius_update=0.95))
+    radius_xf = W / 2 - 1
+    radius_yf = H / 2 - 1
+    
+    radii_x = list(radius_seq(max_radius=radius_xf, min_radius=min_blur_radius, radius_update=0.95))
+    radii_y = list(radius_seq(max_radius=radius_yf, min_radius=min_blur_radius, radius_update=0.95))
 
     if verbose:
-        pbar = tqdm(radii)
+        pbar = tqdm(zip(radii_x, radii_y))
     else:
         pbar = None
 
@@ -534,10 +536,10 @@ def sort_with_plas(
             .unsqueeze(0)
         )
 
-        for radius in radii:
+        for radius_x, radius_y in zip(radii_x, radii_y):
             # compute filtersize that is smaller than any side of the grid
-            filter_size_x = min(W - 1, int(2 * radius + 1))
-            filter_size_y = min(H - 1, int(2 * radius + 1))
+            filter_size_x = min(W - 1, int(2 * radius_x + 1))
+            filter_size_y = min(H - 1, int(2 * radius_y + 1))
 
             params, grid_indices, num_reorders = reorder_plas(
                 params,
@@ -560,7 +562,7 @@ def sort_with_plas(
 
     if verbose:
         print(
-            f"\nSorted {params.shape[2]}x{params.shape[2]}={params.shape[1] * params.shape[2]} Gaussians @ {params.shape[0]} dimensions with PLAS in {duration:.3f} seconds \n       with {total_num_reorders} reorders at a rate of {total_num_reorders / duration:.3f} reorders per second"
+            f"\nSorted {H}x{W}={H * W} Gaussians @ {params.shape[0]} dimensions with PLAS in {duration:.3f} seconds \n       with {total_num_reorders} reorders at a rate of {total_num_reorders / duration:.3f} reorders per second"
         )
 
     return params, grid_indices
