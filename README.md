@@ -15,7 +15,6 @@ Based on the original PLAS paper and implementation:
 ## Features
 
 - Parallel linear assignment sorting for high-dimensional data
-- Support for rectangular (non-square) grid arrangements
 - Efficient sorting into arbitrary rectangular dimensions
 - Based on proven PLAS algorithm architecture
 
@@ -26,7 +25,6 @@ pip install -e .
 ```
 
 ## Requirements
-
 - Python 3.x
 - PyTorch
 - NumPy
