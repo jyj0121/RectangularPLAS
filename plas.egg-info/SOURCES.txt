@@ -1,8 +1,0 @@
-setup.py
-plas/__init__.py
-plas/core.py
-plas.egg-info/PKG-INFO
-plas.egg-info/SOURCES.txt
-plas.egg-info/dependency_links.txt
-plas.egg-info/requires.txt
-plas.egg-info/top_level.txt
