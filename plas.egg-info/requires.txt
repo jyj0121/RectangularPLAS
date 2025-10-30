@@ -1,0 +1,13 @@
+numpy
+torch
+kornia
+tqdm
+pandas
+plyfile
+trimesh
+click
+pillow
+opencv-python
+lapjv
+matplotlib
+scipy

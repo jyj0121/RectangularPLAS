@@ -10,7 +10,6 @@ setup(
         'kornia',
         'tqdm',
 
-        # example/eval deps, maybe split?
         # sort_3d_gaussians
         'pandas',
         'plyfile',
@@ -33,8 +32,4 @@ setup(
         'console_scripts': [
         ],
     },
-    package_data={
-        'plas': ['../img/*.jpg'],
-    },
-    include_package_data=True,
 )
